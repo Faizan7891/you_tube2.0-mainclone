@@ -5,8 +5,9 @@ import {
   createSubscriptionOrder,
   verifySubscriptionPayment,
   getMySubscription,
-   cancelSubscription,
-    scheduleDowngrade,    
+  cancelSubscription,
+  scheduleDowngrade,
+  markPaymentFailed,
 } from "../controllers/subscription.js";
 
 import {
@@ -48,6 +49,12 @@ routes.post(
   "/downgrade",
   verifyToken,
   scheduleDowngrade
+);
+
+routes.post(
+  "/payment-failed",
+  verifyToken,
+  markPaymentFailed
 );
 
 

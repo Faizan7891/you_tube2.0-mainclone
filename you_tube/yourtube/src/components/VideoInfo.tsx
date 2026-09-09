@@ -121,6 +121,7 @@ const VideoInfo = ({ video }: any) => {
 
   try {
     const deviceId = getDeviceId();
+    const idempotencyKey = crypto.randomUUID();
 
     const response = await axiosInstance.get(
       `/download/${video._id}`,
@@ -129,6 +130,7 @@ const VideoInfo = ({ video }: any) => {
 
         headers: {
           "X-Device-ID": deviceId,
+          "X-Idempotency-Key": idempotencyKey,
         },
       }
     );

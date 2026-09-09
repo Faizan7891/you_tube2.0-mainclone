@@ -123,11 +123,19 @@ export const postcomment = async (req, res) => {
     const newComment = new comment({
       userid: user._id,
       videoid,
-      mentions,
+      mentions: [], // Will populate below
       parentCommentId: parentCommentId || null,
       commentbody: trimmedComment,
       usercommented: user.name,
     });
+
+    if (mentions.length > 0) {
+      const mentionedUsers = await users.find(
+        { username: { $in: mentions } },
+        "_id"
+      );
+      newComment.mentions = mentionedUsers.map((u) => u._id);
+    }
 
     await newComment.save();
 
@@ -161,6 +169,7 @@ export const getallcomment = async (req, res) => {
     const commentvideo = await comment
       .find({ videoid })
       .populate("userid", "name username image location")
+      .populate("mentions", "username name image")
       .sort({ createdAt: -1 });
 
     const formattedComments = commentvideo.map((item) => ({
@@ -171,6 +180,8 @@ export const getallcomment = async (req, res) => {
         item.userid?.name ||
         item.usercommented ||
         "Anonymous",
+        
+      commentbody: item.status === "deleted" ? "This comment was deleted by the user." : item.commentbody,
 
       profileImage: item.userid?.image || "",
 
@@ -879,5 +890,74 @@ export const deleteReportedComment = async (
     return res.status(500).json({
       message: "Unable to remove comment.",
     });
+  }
+};
+
+// ===============================
+// TRANSLATE COMMENT (PERSISTENT)
+// ===============================
+export const translateComment = async (req, res) => {
+  const { id: _id } = req.params;
+  const { targetLanguage } = req.body;
+
+  if (!mongoose.Types.ObjectId.isValid(_id)) {
+    return res.status(404).json({ message: "Comment unavailable" });
+  }
+
+  if (!targetLanguage) {
+    return res.status(400).json({ message: "Target language is required" });
+  }
+
+  try {
+    const existingComment = await comment.findById(_id);
+
+    if (!existingComment) {
+      return res.status(404).json({ message: "Comment not found" });
+    }
+
+    if (existingComment.status === "deleted" || !existingComment.commentbody) {
+      return res.status(400).json({ message: "Cannot translate deleted comment" });
+    }
+
+    // Check if translation exists in the map
+    if (existingComment.translations && existingComment.translations.has(targetLanguage)) {
+      return res.status(200).json({
+        translatedText: existingComment.translations.get(targetLanguage),
+        cached: true,
+      });
+    }
+
+    // Fetch from MyMemory API
+    const response = await fetch(
+      `https://api.mymemory.translated.net/get` +
+        `?q=${encodeURIComponent(existingComment.commentbody)}` +
+        `&langpair=autodetect|${targetLanguage}`
+    );
+
+    if (!response.ok) {
+      throw new Error("Translation service unavailable");
+    }
+
+    const data = await response.json();
+    const translatedText = data?.responseData?.translatedText;
+
+    if (!translatedText) {
+      throw new Error("Invalid translation response");
+    }
+
+    // Save back to DB
+    if (!existingComment.translations) {
+      existingComment.translations = new Map();
+    }
+    existingComment.translations.set(targetLanguage, translatedText);
+    await existingComment.save();
+
+    return res.status(200).json({
+      translatedText,
+      cached: false,
+    });
+  } catch (error) {
+    console.error("Translate comment error:", error);
+    return res.status(500).json({ message: "Translation failed" });
   }
 };

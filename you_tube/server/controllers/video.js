@@ -382,6 +382,9 @@ export const uploadvideo = async (req, res) => {
 
       uploader:
         req.body.uploader,
+
+      isPremium:
+        req.body.isPremium === "true",
     });
 
     await file.save();

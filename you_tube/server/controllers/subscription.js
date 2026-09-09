@@ -236,7 +236,16 @@ export const verifySubscriptionPayment = async (
     const invoiceNumber =
       `INV-${Date.now()}`;
 
-    const startDate = new Date();
+    let startDate = new Date();
+
+    // If user has an active paid plan that hasn't expired yet, start the new plan after the current one expires
+    if (
+      currentUser.subscriptionPlan !== "free" &&
+      currentUser.subscriptionExpiryDate &&
+      new Date(currentUser.subscriptionExpiryDate) > new Date()
+    ) {
+      startDate = new Date(currentUser.subscriptionExpiryDate);
+    }
 
     const expiryDate =
       getExpiryDate(
@@ -722,5 +731,41 @@ export const scheduleDowngrade = async (req, res) => {
       message:
         "Unable to schedule downgrade",
     });
+  }
+};
+
+export const markPaymentFailed = async (req, res) => {
+  try {
+    const { orderId } = req.body;
+    
+    if (!orderId) {
+      return res.status(400).json({ message: "Order ID is required" });
+    }
+    
+    const currentUser = await user.findOne({
+      email: req.firebaseUser.email,
+    });
+    
+    if (!currentUser) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    const pendingSubscription = await subscription.findOne({
+      userId: currentUser._id,
+      orderId,
+      paymentStatus: "created",
+    });
+    
+    if (!pendingSubscription) {
+      return res.status(404).json({ message: "Pending subscription not found" });
+    }
+    
+    pendingSubscription.paymentStatus = "failed";
+    await pendingSubscription.save();
+    
+    return res.status(200).json({ message: "Payment marked as failed" });
+  } catch (error) {
+    console.error("Mark payment failed error:", error);
+    return res.status(500).json({ message: "Unable to mark payment as failed" });
   }
 };

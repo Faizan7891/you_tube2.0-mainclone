@@ -223,6 +223,16 @@ if (currentUser.registeredDeviceId !== deviceId) {
   });
 }
 
+const idempotencyKey = req.headers["x-idempotency-key"];
+if (idempotencyKey) {
+  const duplicateRequest = await download.findOne({ idempotencyKey });
+  if (duplicateRequest) {
+    return res.status(409).json({
+      message: "Duplicate download request detected.",
+    });
+  }
+}
+
     // --------------------------------------------------
     // FIND VIDEO
     // --------------------------------------------------
@@ -391,6 +401,7 @@ if (currentUser.registeredDeviceId !== deviceId) {
       fileSize: selectedVideo.filesize,
 
       status: "pending",
+      idempotencyKey: idempotencyKey || undefined,
     });
 
     // --------------------------------------------------
@@ -414,9 +425,10 @@ if (currentUser.registeredDeviceId !== deviceId) {
             error
           );
 
-          // Mark download as failed.
+          // Mark download as failed or interrupted.
           if (downloadRecord) {
-            downloadRecord.status = "failed";
+            const isInterrupted = error.code === 'ECONNABORTED' || error.message?.includes('aborted');
+            downloadRecord.status = isInterrupted ? "interrupted" : "failed";
 
             await downloadRecord.save();
           }

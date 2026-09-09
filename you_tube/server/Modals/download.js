@@ -58,6 +58,11 @@ const downloadSchema = new mongoose.Schema(
       enum: ["pending", "completed", "failed", "interrupted"],
       default: "pending",
     },
+
+    idempotencyKey: {
+      type: String,
+      sparse: true, // we don't set unique: true because a user can restart their browser and use a new idempotencyKey for same video without blocking
+    },
   },
   {
     timestamps: true,

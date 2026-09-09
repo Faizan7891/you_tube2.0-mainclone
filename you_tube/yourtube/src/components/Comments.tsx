@@ -461,8 +461,7 @@ const handleSubmitComment = async () => {
     setShowTranslateOptions(null);
 
     try {
-      const res = await axiosInstance.post("/translation", {
-        text,
+      const res = await axiosInstance.post(`/comment/${commentId}/translate`, {
         targetLanguage,
       });
 

@@ -57,9 +57,22 @@ deletedAt: {
   type: Date,
   default: null,
 },
-    mentions: {
-      type: [String],
-      default: [],
+    mentions: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "user",
+      },
+    ],
+    
+    translations: {
+      type: Map,
+      of: String,
+      default: {},
+    },
+
+    detectedLanguage: {
+      type: String,
+      default: "en",
     },
 
     commentedon: {

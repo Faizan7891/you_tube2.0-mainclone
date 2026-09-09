@@ -1,16 +1,17 @@
 // server/utils/commentSafety.js
 
-const PROFANITY_WORDS = [
-  "fuck",
-  "fucking",
-  "shit",
-  "bitch",
-  "asshole",
-  "bastard",
-  "idiot",
-  "stupid",
-  "dumbass",
-];
+import leoProfanity from "leo-profanity";
+
+// Load multiple language dictionaries
+leoProfanity.loadDictionary('en'); // Default english
+try {
+  // If leo-profanity supports adding French, Russian, etc.
+  leoProfanity.loadDictionary('fr');
+  leoProfanity.loadDictionary('ru');
+} catch (e) {
+  // Some versions of leo-profanity might not support these natively without custom dicts,
+  // so we catch any error to ensure 'en' works.
+}
 
 const normalizeText = (text = "") => {
   return text
@@ -23,16 +24,7 @@ const normalizeText = (text = "") => {
 // PROFANITY
 // ================================
 export const containsProfanity = (text) => {
-  const normalized = normalizeText(text);
-
-  return PROFANITY_WORDS.some((word) => {
-    const regex = new RegExp(
-      `(^|\\s)${word}(\\s|$)`,
-      "i"
-    );
-
-    return regex.test(normalized);
-  });
+  return leoProfanity.check(text);
 };
 
 // ================================

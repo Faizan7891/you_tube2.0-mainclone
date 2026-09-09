@@ -218,7 +218,14 @@ const Subscription = () => {
         },
 
         modal: {
-          ondismiss: () => {
+          ondismiss: async () => {
+            try {
+              await axiosInstance.post("/subscription/payment-failed", {
+                orderId,
+              });
+            } catch (e) {
+              console.error(e);
+            }
             setPaymentLoading(false);
           },
         },
@@ -235,11 +242,19 @@ const Subscription = () => {
 
       razorpay.on(
         "payment.failed",
-        (response: any) => {
+        async (response: any) => {
           console.error(
             "Payment failed:",
             response
           );
+
+          try {
+            await axiosInstance.post("/subscription/payment-failed", {
+              orderId,
+            });
+          } catch (e) {
+            console.error(e);
+          }
 
           alert(
             "Payment failed. Your subscription was not activated."

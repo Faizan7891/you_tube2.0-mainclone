@@ -10,8 +10,9 @@ import {
   editcomment,
   getReportedComments,
   reviewReport,
-dismissReport,
-deleteReportedComment,
+  dismissReport,
+  deleteReportedComment,
+  translateComment,
 } from "../controllers/comment.js";
 
 import commentRateLimit from "../middleware/commentRateLimit.js";
@@ -80,6 +81,14 @@ routes.post(
   "/editcomment/:id",
   requireAuth,
   editcomment
+);
+
+// ===============================
+// TRANSLATE COMMENT
+// ===============================
+routes.post(
+  "/:id/translate",
+  translateComment
 );
 
 // ===============================
