@@ -29,6 +29,7 @@ interface VideoPlayerProps {
     videotitle: string;
     filepath: string;
     isPremium?: boolean;
+    isCourse?: boolean;
 
     qualities?: VideoQuality[];
   };
@@ -62,8 +63,45 @@ export default function VideoPlayer({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isTheater, setIsTheater] = useState(false);
-const [selectedQuality, setSelectedQuality] =
-  useState("Auto");
+  const [selectedQuality, setSelectedQuality] = useState("Auto");
+
+  // =========================================================
+  // ADS & WATCH LIMIT (FREE USERS)
+  // =========================================================
+  const isFreeUser = !user || user.subscriptionPlan === "free";
+  
+  const [showAd, setShowAd] = useState(
+    !video?.isPremium && isFreeUser
+  );
+  const [adCountdown, setAdCountdown] = useState(5);
+  const adTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const [watchLimitReached, setWatchLimitReached] = useState(false);
+
+  useEffect(() => {
+    if (showAd) {
+      adTimerRef.current = setInterval(() => {
+        setAdCountdown((prev) => {
+          if (prev <= 1) {
+            if (adTimerRef.current) clearInterval(adTimerRef.current);
+            setShowAd(false);
+            
+            // Auto play the video after ad finishes
+            if (videoRef.current) {
+              videoRef.current.play().catch(() => {});
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+
+    return () => {
+      if (adTimerRef.current) clearInterval(adTimerRef.current);
+    };
+  }, [showAd]);
+
   // =========================================================
   // 5.6 - AUTO HIDE CONTROLS
   // =========================================================
@@ -113,6 +151,15 @@ const [selectedQuality, setSelectedQuality] =
 
     if (!player) return;
 
+    if (showAd) {
+      // Do not allow play toggle if ad is showing
+      return;
+    }
+    
+    if (watchLimitReached) {
+      return;
+    }
+
     if (player.paused) {
       player.play().catch((error) => {
         console.error("Play error:", error);
@@ -132,6 +179,12 @@ const [selectedQuality, setSelectedQuality] =
     if (!player) return;
 
     setCurrentTime(player.currentTime);
+
+    // Enforce 3-minute watch limit for Free users
+    if (isFreeUser && player.currentTime >= 180 && !watchLimitReached) {
+      player.pause();
+      setWatchLimitReached(true);
+    }
   };
 
   // =========================================================
@@ -962,6 +1015,23 @@ useEffect(() => {
     );
   }
 
+  if (video?.isCourse && isFreeUser) {
+    return (
+      <div className="relative w-full aspect-video bg-zinc-900 overflow-hidden flex flex-col items-center justify-center text-white border border-white/10 shadow-2xl">
+        <div className="text-blue-500 mb-4">
+          <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"></path></svg>
+        </div>
+        <h2 className="text-2xl font-bold mb-2 text-center">Exclusive Premium Course</h2>
+        <p className="text-gray-400 mb-6 text-center max-w-md">
+          This educational course is exclusive to our premium members. Upgrade your subscription to unlock the full curriculum.
+        </p>
+        <a href="/subscription" className="px-6 py-3 bg-blue-600 text-white font-semibold rounded-full hover:bg-blue-500 transition transform hover:scale-105">
+          Unlock Courses
+        </a>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={containerRef}
@@ -1031,6 +1101,37 @@ useEffect(() => {
         Your browser does not support
         the video tag.
       </video>
+
+      {/* =====================================================
+          ADS & WATCH LIMIT OVERLAYS
+      ===================================================== */}
+
+      {showAd && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/90 pointer-events-auto">
+          <div className="text-yellow-500 mb-4 animate-pulse">
+            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg>
+          </div>
+          <h2 className="text-xl font-bold text-white mb-2 text-center">Sponsor Ad</h2>
+          <p className="text-gray-300 mb-6 text-center">
+            Ad ends in <span className="text-yellow-400 font-bold">{adCountdown}</span>s. Upgrade to Premium for ad-free viewing!
+          </p>
+        </div>
+      )}
+
+      {watchLimitReached && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/95 pointer-events-auto backdrop-blur-sm">
+          <div className="text-red-500 mb-4">
+            <svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-2 text-center">Watch Limit Reached</h2>
+          <p className="text-gray-300 mb-6 text-center max-w-md">
+            You have reached the 3-minute free preview limit for this video. Subscribe to unlock unlimited access!
+          </p>
+          <a href="/subscription" className="px-6 py-3 bg-red-600 text-white font-semibold rounded-full hover:bg-red-500 transition transform hover:scale-105 shadow-lg">
+            Upgrade Now
+          </a>
+        </div>
+      )}
 
       {/* =====================================================
           5.7 - BUFFERING SPINNER
@@ -1326,7 +1427,16 @@ useEffect(() => {
         Auto
       </option>
 
-      {video.qualities.map(
+      {video.qualities
+        .filter((quality) => {
+          if (!isFreeUser) return true;
+          // Hide HD options for free users
+          if (quality.label.includes("720p") || quality.label.includes("1080p") || quality.label.includes("1440p") || quality.label.includes("4K")) {
+            return false;
+          }
+          return true;
+        })
+        .map(
         (quality) => (
           <option
             key={quality.label}

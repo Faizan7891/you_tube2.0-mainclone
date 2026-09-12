@@ -107,8 +107,8 @@ const userschema = mongoose.Schema({
 
   theme: {
     type: String,
-    enum: ["light", "dark"],
-    default: "dark",
+    enum: ["light", "dark", "auto"],
+    default: "auto",
   },
 
   // =========================

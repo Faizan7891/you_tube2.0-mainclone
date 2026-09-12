@@ -127,6 +127,11 @@ qualities: [
       type: Boolean,
       default: false,
     },
+
+    isCourse: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
