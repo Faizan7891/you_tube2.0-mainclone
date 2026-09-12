@@ -47,6 +47,7 @@ export default function VideoCall() {
   const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
 
   const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteSocketIdRef = useRef<string | null>(null);
 
   
 
@@ -90,7 +91,7 @@ export default function VideoCall() {
 
   // BATCH 4-7 STATE
   const [viewMode, setViewMode] = useState<"grid" | "speaker">("grid");
-  const [pinnedParticipant, setPinnedParticipant] = useState<"local" | "remote">("remote");
+  const [pinnedParticipant, setPinnedParticipant] = useState<"local" | "remote" | string>("remote");
   const [isLocalFullscreen, setIsLocalFullscreen] = useState(false);
   const [isRemoteFullscreen, setIsRemoteFullscreen] = useState(false);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
@@ -120,10 +121,11 @@ export default function VideoCall() {
 
     try {
       const stream = new MediaStream([...localStream.getTracks()]);
-      const remoteStream = remoteVideoRef.current?.srcObject as MediaStream;
-      if (remoteStream) {
-        remoteStream.getAudioTracks().forEach((track) => stream.addTrack(track));
-      }
+      Object.values(remoteStreams).forEach(remoteStream => {
+        if (remoteStream) {
+          remoteStream.getAudioTracks().forEach((track) => stream.addTrack(track));
+        }
+      });
 
       const recorder = new MediaRecorder(stream, { mimeType: "video/webm" });
 
@@ -246,8 +248,8 @@ export default function VideoCall() {
   // ========================================================
 
   const createPeer = useCallback((targetId: string, createOffer: boolean) => {
-    if (peerRef.current) {
-      return peerRef.current;
+    if (peersRef.current.has(targetId)) {
+      return peersRef.current.get(targetId)!;
     }
 
     const peer = new RTCPeerConnection({
@@ -319,7 +321,7 @@ export default function VideoCall() {
         setStatus("Reconnecting...");
         setIsReconnecting(true);
 
-        if (iceRestartingRef.current || !remoteSocketIdRef.current) return;
+        if (iceRestartingRef.current || !targetId) return;
         iceRestartingRef.current = true;
 
         try {
@@ -328,7 +330,7 @@ export default function VideoCall() {
           if (peer.signalingState === "closed") return;
           await peer.setLocalDescription(offer);
           socketRef.current?.emit("offer", {
-            target: remoteSocketIdRef.current,
+            target: targetId,
             offer: peer.localDescription,
           });
           console.log("ICE restart offer sent");
@@ -363,8 +365,8 @@ export default function VideoCall() {
 
       const remoteStream = event.streams[0];
 
-      if (remoteVideoRef.current && remoteStream) {
-        remoteVideoRef.current.srcObject = remoteStream;
+      if (remoteStream) {
+        setRemoteStreams((prev) => ({ ...prev, [targetId]: remoteStream }));
 
         // ==========================================
         // REMOTE SPEAKING DETECTION
@@ -404,7 +406,7 @@ export default function VideoCall() {
               ) / data.length;
 
             setIsRemoteSpeaking(
-              volume > 20
+              (prev) => ({ ...prev, [targetId]: volume > 20 })
             );
 
             requestAnimationFrame(
@@ -415,9 +417,6 @@ export default function VideoCall() {
           detectSpeaking();
         }
 
-        remoteVideoRef.current
-          .play()
-          .catch(() => { });
       }
 
       setStatus("Connected");
@@ -657,11 +656,11 @@ export default function VideoCall() {
               return;
             }
 
-            const target = participants[0]?.socketId;
-
-            remoteSocketIdRef.current = target;
-
-            createPeer(target, true);
+            participants.forEach((p: { socketId: string }) => {
+              if (p.socketId !== socket.id) {
+                createPeer(p.socketId, true);
+              }
+            });
           },
         );
 
@@ -690,12 +689,7 @@ export default function VideoCall() {
             return [...current, { socketId, userName: userName || "Guest" }];
           });
 
-          remoteSocketIdRef.current = socketId;
-
           setStatus("Participant joined...");
-
-          // The new user receives the
-          // offer from the existing user.
         });
 
         // =================================================
@@ -708,7 +702,7 @@ export default function VideoCall() {
           // If this event belongs to the other participant,
           // update the remote video indicator.
           if (socketRef.current && socketId !== socketRef.current.id) {
-            setRemoteHandRaised(Boolean(raised));
+            setRemoteHandRaised((prev) => ({ ...prev, [socketId]: Boolean(raised) }));
           }
 
           // Keep participant list status
@@ -729,136 +723,6 @@ export default function VideoCall() {
         // =================================================
 
         socket.on("offer", async ({ sender, offer }) => {
-          if (sender === socketRef.current?.id) return;
-          console.log("Offer received");
-
-          remoteSocketIdRef.current = sender;
-
-          const peer = createPeer(sender, false);
-
-          try {
-            await peer.setRemoteDescription(new RTCSessionDescription(offer));
-
-            const answer = await peer.createAnswer();
-
-            await peer.setLocalDescription(answer);
-
-            socket.emit("answer", {
-              target: sender,
-              answer: peer.localDescription,
-            });
-          } catch (err) {
-            console.error("Answer error:", err);
-          }
-        });
-
-        // =================================================
-        // ANSWER
-        // =================================================
-
-        socket.on("answer", async ({ answer }) => {
-          console.log("Answer received");
-
-          if (!peerRef.current) {
-            return;
-          }
-
-          try {
-            await peerRef.current.setRemoteDescription(
-              new RTCSessionDescription(answer),
-            );
-
-            setStatus("Connected");
-            setIsReconnecting(false);
-            setIsRestoringCall(false);
-            wasConnectedRef.current = true;
-          } catch (err) {
-            console.error("Answer description error:", err);
-          }
-        });
-
-        // =================================================
-        // ICE
-        // =================================================
-
-        socket.on("ice-candidate", async ({ candidate }) => {
-          if (!candidate || !peerRef.current) {
-            return;
-          }
-
-          try {
-            await peerRef.current.addIceCandidate(
-              new RTCIceCandidate(candidate),
-            );
-          } catch (err) {
-            console.error("ICE candidate error:", err);
-          }
-        });
-
-        // =================================================
-        // IN-CALL CHAT
-        // =================================================
-
-        socket.on("call-chat-message", ({ sender, message, file, timestamp }) => {
-          setChatMessages((current) => [
-            ...current,
-            { sender, message, file, timestamp },
-          ]);
-
-          if (!showChat) {
-            setUnreadChatCount((current) => current + 1);
-          }
-        });
-
-        socket.on("host-waiting-room-changed", ({ enabled }) => {
-          setWaitingRoomEnabled(Boolean(enabled));
-        });
-
-        socket.on("host-mute-all", () => {
-          localStreamRef.current?.getAudioTracks().forEach((track) => {
-            track.enabled = false;
-          });
-          setMicEnabled(false);
-        });
-
-        socket.on("host-lower-all-hands", () => {
-          setHandRaised(false);
-          setRemoteHandRaised(false);
-          setRaisedHands([]);
-        });
-
-        // =================================================
-        // RAISE HAND
-        // =================================================
-
-        socket.on("participant-hand", ({ socketId, raised }) => {
-          setRaisedHands((current) => {
-            if (raised) {
-              if (current.includes(socketId)) {
-                return current;
-              }
-
-              return [...current, socketId];
-            }
-
-            return current.filter((id) => id !== socketId);
-          });
-        });
-        // =================================================
-        // USER LEFT
-        // =================================================
-
-        socket.on("user-left", () => {
-          console.log("Participant left");
-
-          if (remoteVideoRef.current) {
-            remoteVideoRef.current.srcObject = null;
-          }
-
-          peerRef.current?.close();
-
-          peerRef.current = null;
-
           remoteSocketIdRef.current = null;
 
           setStatus("Waiting for participant...");
@@ -897,8 +761,10 @@ export default function VideoCall() {
           setError("You were removed from the meeting.");
           setStatus("Removed from meeting");
 
-          peerRef.current?.close();
-          peerRef.current = null;
+          for (const [id, peer] of Array.from(peersRef.current.entries())) {
+            peer.close();
+            peersRef.current.delete(id);
+          }
 
           localStreamRef.current?.getTracks().forEach((track) => track.stop());
           localStreamRef.current = null;
@@ -1008,7 +874,10 @@ export default function VideoCall() {
 
       socketRef.current?.disconnect();
 
-      peerRef.current?.close();
+      for (const [id, peer] of Array.from(peersRef.current.entries())) {
+        peer.close();
+        peersRef.current.delete(id);
+      }
 
       screenStreamRef.current?.getTracks().forEach((track) => track.stop());
 
@@ -1018,8 +887,6 @@ export default function VideoCall() {
 
       socketRef.current = null;
 
-      peerRef.current = null;
-
       localStreamRef.current = null;
     };
   }, [roomId, createPeer]);
@@ -1028,8 +895,10 @@ export default function VideoCall() {
   // MICROPHONE
   // ========================================================
 
-  const toggleFullscreen = async (target: "local" | "remote") => {
-    const element = target === "local" ? localVideoRef.current : remoteVideoRef.current;
+  const toggleFullscreen = async (target: "local" | "remote" | string) => {
+    // Note: Remote fullscreen toggling in Mesh is simplified or requires finding the correct DOM node.
+    // For now, we only support local fullscreen via this generic toggle, or remote via specific buttons.
+    const element = target === "local" ? localVideoRef.current : document.getElementById(`video-${target}`);
     if (!element) return;
     try {
       if (document.fullscreenElement === element) { await document.exitFullscreen(); return; }
@@ -1038,7 +907,7 @@ export default function VideoCall() {
     } catch (e) { console.error("Fullscreen error:", e); setError("Fullscreen is not available in this browser."); }
   };
 
-  const togglePin = (target: "local" | "remote") => {
+  const togglePin = (target: "local" | "remote" | string) => {
     setPinnedParticipant((current) => current === target ? "remote" : target);
   };
 
@@ -1061,14 +930,14 @@ export default function VideoCall() {
 
   const lowerAllHands = () => {
     if (!isHost && !isCoHost) return;
-    setRaisedHands([]); setRemoteHandRaised(false); setHandRaised(false);
+    setRaisedHands([]); setRemoteHandRaised({}); setHandRaised(false);
     socketRef.current?.emit("host-lower-all-hands", { roomId });
   };
 
   useEffect(() => {
     const onFullscreen = () => {
       setIsLocalFullscreen(document.fullscreenElement === localVideoRef.current);
-      setIsRemoteFullscreen(document.fullscreenElement === remoteVideoRef.current);
+      setIsRemoteFullscreen(false); // Simplified for mesh
     };
     document.addEventListener("fullscreenchange", onFullscreen);
     return () => document.removeEventListener("fullscreenchange", onFullscreen);
@@ -1171,11 +1040,13 @@ export default function VideoCall() {
       const nextTrack = nextStream.getVideoTracks()[0];
       if (!nextTrack) throw new Error("No camera track returned.");
 
-      const peer = peerRef.current;
-      const sender = peer?.getSenders().find((item) => item.track?.kind === "video");
+      // For mesh we update all connections
+      for (const peer of Array.from(peersRef.current.values())) {
+        const sender = peer.getSenders().find((item) => item.track?.kind === "video");
 
-      if (sender) {
-        await sender.replaceTrack(nextTrack);
+        if (sender) {
+          await sender.replaceTrack(nextTrack);
+        }
       }
 
       if (currentStream) {
@@ -1199,14 +1070,8 @@ export default function VideoCall() {
       console.error("Camera switch error:", err);
       setError("Unable to switch camera. Your device may have only one available camera.");
     } finally {
-      nextStreamCleanup();
       setIsSwitchingCamera(false);
     }
-  };
-
-  // Stops any temporary stream left after a camera switch.
-  const nextStreamCleanup = () => {
-    // The active track is owned by localStreamRef and must remain running.
   };
 
   // ========================================================
@@ -1224,18 +1089,18 @@ export default function VideoCall() {
 
     const cameraTrack = cameraStream?.getVideoTracks()[0] || null;
 
-    const peer = peerRef.current;
+    if (cameraTrack) {
+      for (const peer of Array.from(peersRef.current.values())) {
+        const videoSender = peer
+          .getSenders()
+          .find((sender) => sender.track?.kind === "video");
 
-    if (peer && cameraTrack) {
-      const videoSender = peer
-        .getSenders()
-        .find((sender) => sender.track?.kind === "video");
-
-      if (videoSender) {
-        try {
-          await videoSender.replaceTrack(cameraTrack);
-        } catch (err) {
-          console.error("Failed to restore camera track:", err);
+        if (videoSender) {
+          try {
+            await videoSender.replaceTrack(cameraTrack);
+          } catch (err) {
+            console.error("Failed to restore camera track:", err);
+          }
         }
       }
     }
@@ -1292,9 +1157,8 @@ export default function VideoCall() {
 
       // Replace the camera video track on the
       // existing WebRTC connection.
-      const peer = peerRef.current;
-
-      if (peer) {
+      
+      for (const peer of Array.from(peersRef.current.values())) {
         const videoSender = peer
           .getSenders()
           .find((sender) => sender.track?.kind === "video");
@@ -1480,9 +1344,8 @@ export default function VideoCall() {
       if (manuallyLeavingRef.current || !roomId) return;
 
       const socket = socketRef.current;
-      const peer = peerRef.current;
 
-      if (!socket || !socket.connected || !peer || peer.connectionState === "failed" || peer.connectionState === "closed") {
+      if (!socket || !socket.connected) {
         setIsRestoringCall(true);
         setIsReconnecting(true);
         setStatus("Restoring call...");
@@ -1503,7 +1366,7 @@ export default function VideoCall() {
       window.removeEventListener("offline", handleOffline);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [roomId]);
+  }, [roomId, user]);
 
   // ========================================================
   // LEAVE
@@ -1526,13 +1389,20 @@ export default function VideoCall() {
 
     socketRef.current?.disconnect();
 
-    peerRef.current?.close();
+    for (const [id, peer] of Array.from(peersRef.current.entries())) {
+      peer.close();
+      peersRef.current.delete(id);
+    }
 
     screenStreamRef.current?.getTracks().forEach((track) => track.stop());
 
     screenStreamRef.current = null;
 
     localStreamRef.current?.getTracks().forEach((track) => track.stop());
+
+    socketRef.current = null;
+
+    localStreamRef.current = null;
 
     router.push("/");
   };
@@ -1693,9 +1563,6 @@ export default function VideoCall() {
             </div>
           );
         })}
-
-      
-        </div>
       </div>
 
       <div className="mx-6 mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-800 bg-gray-900 p-4">
@@ -1939,96 +1806,122 @@ export default function VideoCall() {
           </div>
         </div>
       )}
-          {showMeetingSettings && (
-            <div className="mx-6 mb-4 rounded-xl border border-gray-800 bg-gray-900 p-5"><div className="mb-4 flex items-center justify-between"><div><h2 className="font-semibold">Meeting Settings</h2><p className="text-xs text-gray-500">Current call status.</p></div><button type="button" onClick={() => setShowMeetingSettings(false)} className="text-gray-400">✕</button></div><div className="grid gap-3 sm:grid-cols-2"><div className="rounded-lg bg-gray-800 p-3"><p className="text-xs text-gray-400">Participants</p><p className="mt-1 font-medium">{participants.length + 1} / {MAX_PARTICIPANTS}</p></div><div className="rounded-lg bg-gray-800 p-3"><p className="text-xs text-gray-400">Meeting security</p><p className="mt-1 font-medium">{meetingToken ? "Session authenticated" : "Initializing..."}</p></div><div className="rounded-lg bg-gray-800 p-3"><p className="text-xs text-gray-400">Connection</p><p className="mt-1 font-medium">{connectionQuality}</p></div><div className="rounded-lg bg-gray-800 p-3"><p className="text-xs text-gray-400">Status</p><p className="mt-1 font-medium">{status}</p></div></div></div>
-          )}
-
-          {/* CONTROLS */}
-
-          <div className="flex justify-center gap-3 border-t border-gray-800 p-6">
-            <button
-              type="button"
-              onClick={toggleMicrophone}
-              className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700"
-            >
-              {micEnabled ? "🎤 Mute" : "🔇 Unmute"}
-            </button>
-
-            <button
-              type="button"
-              onClick={toggleCamera}
-              className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700"
-            >
-              {cameraEnabled ? "📷 Camera Off" : "📷 Camera On"}
-            </button>
-
-            <button
-              type="button"
-              onClick={switchCamera}
-              disabled={isSwitchingCamera || isScreenSharing}
-              className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isSwitchingCamera ? "🔄 Switching..." : "🔄 Switch Camera"}
-            </button>
-
-            {isHost && (
-              <button
-                type="button"
-                onClick={toggleRecording}
-                className={`cursor-pointer rounded-full px-6 py-3 text-white ${isRecording ? "bg-red-600 hover:bg-red-700" : "bg-gray-800 hover:bg-gray-700"
-                  }`}
-              >
-                {isRecording ? "⏹️ Stop Recording" : "⏺️ Record"}
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={toggleScreenSharing}
-              disabled={!screenShareAllowed && !isHost && !isCoHost}
-              className={`cursor-pointer rounded-full px-6 py-3 text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${isScreenSharing ? "bg-orange-600" : "bg-gray-800"
-                }`}
-            >
-              {isScreenSharing ? "🛑 Stop Sharing" : "🖥️ Share Screen"}
-            </button>
-
-            <button type="button" onClick={() => setShowMeetingSettings((current) => !current)} className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700">⚙️ Settings</button>
-
-            <button
-              type="button"
-              onClick={leaveCall}
-              className="cursor-pointer rounded-full bg-red-600 px-7 py-3 font-semibold text-white hover:bg-red-700"
-            >
-              📞 Leave
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowParticipants((current) => !current)}
-              className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700"
-            >
-              👥 Participants ({participants.length + 1})
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setShowChat((current) => !current)}
-              className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700"
-            >
-              💬 Chat ({chatMessages.length}){unreadChatCount > 0 ? ` • ${unreadChatCount} new` : ""}
-            </button>
-
-            <button
-              type="button"
-              onClick={toggleRaiseHand}
-              className={`cursor-pointer rounded-full px-6 py-3 text-white ${handRaised
-                  ? "bg-yellow-600 hover:bg-yellow-700"
-                  : "bg-gray-800 hover:bg-gray-700"
-                }`}
-            >
-              {handRaised ? "✋ Lower Hand" : "✋ Raise Hand"}
-            </button>
+      
+      {showMeetingSettings && (
+        <div className="mx-6 mb-4 rounded-xl border border-gray-800 bg-gray-900 p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold">Meeting Settings</h2>
+              <p className="text-xs text-gray-500">Current call status.</p>
+            </div>
+            <button type="button" onClick={() => setShowMeetingSettings(false)} className="text-gray-400">✕</button>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg bg-gray-800 p-3">
+              <p className="text-xs text-gray-400">Participants</p>
+              <p className="mt-1 font-medium">{participants.length + 1} / {MAX_PARTICIPANTS}</p>
+            </div>
+            <div className="rounded-lg bg-gray-800 p-3">
+              <p className="text-xs text-gray-400">Meeting security</p>
+              <p className="mt-1 font-medium">{meetingToken ? "Session authenticated" : "Initializing..."}</p>
+            </div>
+            <div className="rounded-lg bg-gray-800 p-3">
+              <p className="text-xs text-gray-400">Connection</p>
+              <p className="mt-1 font-medium">{connectionQuality}</p>
+            </div>
+            <div className="rounded-lg bg-gray-800 p-3">
+              <p className="text-xs text-gray-400">Status</p>
+              <p className="mt-1 font-medium">{status}</p>
+            </div>
           </div>
         </div>
-      );
+      )}
+
+      {/* CONTROLS */}
+      <div className="flex justify-center gap-3 border-t border-gray-800 p-6">
+        <button
+          type="button"
+          onClick={toggleMicrophone}
+          className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700"
+        >
+          {micEnabled ? "🎤 Mute" : "🔇 Unmute"}
+        </button>
+
+        <button
+          type="button"
+          onClick={toggleCamera}
+          className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700"
+        >
+          {cameraEnabled ? "📷 Camera Off" : "📷 Camera On"}
+        </button>
+
+        <button
+          type="button"
+          onClick={switchCamera}
+          disabled={isSwitchingCamera || isScreenSharing}
+          className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isSwitchingCamera ? "🔄 Switching..." : "🔄 Switch Camera"}
+        </button>
+
+        {isHost && (
+          <button
+            type="button"
+            onClick={toggleRecording}
+            className={`cursor-pointer rounded-full px-6 py-3 text-white ${isRecording ? "bg-red-600 hover:bg-red-700" : "bg-gray-800 hover:bg-gray-700"
+              }`}
+          >
+            {isRecording ? "⏹️ Stop Recording" : "⏺️ Record"}
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={toggleScreenSharing}
+          disabled={!screenShareAllowed && !isHost && !isCoHost}
+          className={`cursor-pointer rounded-full px-6 py-3 text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${isScreenSharing ? "bg-orange-600" : "bg-gray-800"
+            }`}
+        >
+          {isScreenSharing ? "🛑 Stop Sharing" : "🖥️ Share Screen"}
+        </button>
+
+        <button type="button" onClick={() => setShowMeetingSettings((current) => !current)} className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700">⚙️ Settings</button>
+
+        <button
+          type="button"
+          onClick={leaveCall}
+          className="cursor-pointer rounded-full bg-red-600 px-7 py-3 font-semibold text-white hover:bg-red-700"
+        >
+          📞 Leave
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowParticipants((current) => !current)}
+          className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700"
+        >
+          👥 Participants ({participants.length + 1})
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowChat((current) => !current)}
+          className="cursor-pointer rounded-full bg-gray-800 px-6 py-3 text-white hover:bg-gray-700"
+        >
+          💬 Chat ({chatMessages.length}){unreadChatCount > 0 ? ` • ${unreadChatCount} new` : ""}
+        </button>
+
+        <button
+          type="button"
+          onClick={toggleRaiseHand}
+          className={`cursor-pointer rounded-full px-6 py-3 text-white ${handRaised
+              ? "bg-yellow-600 hover:bg-yellow-700"
+              : "bg-gray-800 hover:bg-gray-700"
+            }`}
+        >
+          {handRaised ? "✋ Lower Hand" : "✋ Raise Hand"}
+        </button>
+      </div>
+    </div>
+  );
 }
