@@ -97,11 +97,11 @@ const Downloads = () => {
           <div className="space-y-4">
             {downloads.map((item) => (
               <div key={item._id} className="border rounded-lg p-4 flex gap-4">
-                {/* Video preview */}
                 <div className="w-40 h-24 bg-muted rounded overflow-hidden flex-shrink-0">
                   {item.videoId?.thumbnail ? (
                     <img
-src={`${process.env.BACKEND_URL}${item.videoId.thumbnail}`}                      alt={item.videoId?.videotitle || "Video thumbnail"}
+                      src={`${process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:5000"}${item.videoId.thumbnail.startsWith('/') ? '' : '/'}${item.videoId.thumbnail}`}
+                      alt={item.videoId?.videotitle || "Video thumbnail"}
                       className="w-full h-full object-cover"
                     />
                   ) : (

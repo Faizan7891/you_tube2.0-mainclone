@@ -20,6 +20,7 @@ import captchaRoutes from "./routes/captcha.js";
 import downloadRoutes from "./routes/download.js";
 import securityRoutes from "./routes/security.js";
 import subscriptionRoutes from "./routes/subscription.js";
+import subscriberRoutes from "./routes/subscriber.js";
 
 import {
   processExpiredSubscriptions,
@@ -122,6 +123,11 @@ app.use(
 app.use(
   "/security",
   securityRoutes
+);
+
+app.use(
+  "/subscriber",
+  subscriberRoutes
 );
 
 // =========================================================

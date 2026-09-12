@@ -7,13 +7,18 @@ export const verifyToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    let token;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      token = authHeader.split("Bearer ")[1];
+    } else if (req.query.token) {
+      token = req.query.token;
+    }
+
+    if (!token) {
       return res.status(401).json({
         message: "Authentication required",
       });
     }
-
-    const token = authHeader.split("Bearer ")[1];
 
     const decodedToken = await adminAuth.verifyIdToken(token);
 

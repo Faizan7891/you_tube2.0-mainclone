@@ -459,3 +459,38 @@ export const getallvideo = async (req, res) => {
     });
   }
 };
+
+// =========================================================
+// DELETE VIDEO
+// =========================================================
+
+export const deletevideo = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const videoData = await video.findById(id);
+
+    if (!videoData) {
+      return res.status(404).json({ message: "Video not found" });
+    }
+
+    if (videoData.uploader !== userId) {
+      return res.status(403).json({ message: "You don't have permission to delete this video" });
+    }
+
+    await video.findByIdAndDelete(id);
+
+    // Note: To be fully clean we could also delete the files from the filesystem
+    // but a DB delete is sufficient for MVP video deletion.
+
+    return res.status(200).json({ message: "Video deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting video:", error);
+    return res.status(500).json({ message: "Server error deleting video" });
+  }
+};

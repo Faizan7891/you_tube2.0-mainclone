@@ -13,6 +13,7 @@ import { formatDistanceToNow } from "date-fns";
 import { useUser } from "@/lib/AuthContext";
 import axiosInstance from "@/lib/axiosinstance";
 import { getDeviceId } from "@/lib/deviceId";
+import { auth } from "@/lib/firebase";
 
 const VideoInfo = ({ video }: any) => {
   const [likes, setlikes] = useState(video.Like || 0);
@@ -22,6 +23,7 @@ const VideoInfo = ({ video }: any) => {
   const [showFullDescription, setShowFullDescription] = useState(false);
   const { user } = useUser();
   const [isWatchLater, setIsWatchLater] = useState(false);
+  const [isSubscribed, setIsSubscribed] = useState(false);
 
   // const user: any = {
   //   id: "1",
@@ -34,7 +36,14 @@ const VideoInfo = ({ video }: any) => {
     setDislikes(video.Dislike || 0);
     setIsLiked(false);
     setIsDisliked(false);
-  }, [video]);
+
+    if (user && video.videochanel) {
+      axiosInstance
+        .get(`/subscriber/check/${video.videochanel}?userId=${user._id}`)
+        .then((res) => setIsSubscribed(res.data.subscribed))
+        .catch(console.error);
+    }
+  }, [video, user]);
 
   useEffect(() => {
     const handleviews = async () => {
@@ -59,17 +68,15 @@ const VideoInfo = ({ video }: any) => {
         userId: user?._id,
       });
       if (res.data.liked) {
-        if (isLiked) {
-          setlikes((prev: any) => prev - 1);
-          setIsLiked(false);
-        } else {
-          setlikes((prev: any) => prev + 1);
-          setIsLiked(true);
-          if (isDisliked) {
-            setDislikes((prev: any) => prev - 1);
-            setIsDisliked(false);
-          }
+        setlikes((prev: any) => prev + 1);
+        setIsLiked(true);
+        if (isDisliked) {
+          setDislikes((prev: any) => Math.max(0, prev - 1));
+          setIsDisliked(false);
         }
+      } else {
+        setlikes((prev: any) => Math.max(0, prev - 1));
+        setIsLiked(false);
       }
     } catch (error) {
       console.log(error);
@@ -92,20 +99,21 @@ const VideoInfo = ({ video }: any) => {
   const handleDislike = async () => {
     if (!user) return;
     try {
-      const res = await axiosInstance.post(`/like/${video._id}`, {
-        userId: user?._id,
-      });
-      if (!res.data.liked) {
-        if (isDisliked) {
-          setDislikes((prev: any) => prev - 1);
-          setIsDisliked(false);
-        } else {
-          setDislikes((prev: any) => prev + 1);
-          setIsDisliked(true);
-          if (isLiked) {
-            setlikes((prev: any) => prev - 1);
-            setIsLiked(false);
-          }
+      // Temporary frontend-only logic for dislike toggling
+      // since there is no dedicated dislike endpoint.
+      if (isDisliked) {
+        setDislikes((prev: any) => Math.max(0, prev - 1));
+        setIsDisliked(false);
+      } else {
+        setDislikes((prev: any) => prev + 1);
+        setIsDisliked(true);
+        if (isLiked) {
+          setlikes((prev: any) => Math.max(0, prev - 1));
+          setIsLiked(false);
+          // Try to actually unlike in the backend to stay synced
+          await axiosInstance.post(`/like/${video._id}`, {
+            userId: user?._id,
+          });
         }
       }
     } catch (error) {
@@ -113,81 +121,81 @@ const VideoInfo = ({ video }: any) => {
     }
   };
 
- const handleDownload = async () => {
-  if (!user) {
-    alert("Please login to download videos.");
-    return;
-  }
-
-  try {
-    const deviceId = getDeviceId();
-    const idempotencyKey = crypto.randomUUID();
-
-    const response = await axiosInstance.get(
-      `/download/${video._id}`,
-      {
-        responseType: "blob",
-
-        headers: {
-          "X-Device-ID": deviceId,
-          "X-Idempotency-Key": idempotencyKey,
-        },
-      }
-    );
-
-    const blob = new Blob([
-      response.data,
-    ]);
-
-    const url =
-      window.URL.createObjectURL(blob);
-
-    const link =
-      document.createElement("a");
-
-    link.href = url;
-
-    link.download =
-      video.filename || "video.mp4";
-
-    document.body.appendChild(link);
-
-    link.click();
-
-    link.remove();
-
-    window.URL.revokeObjectURL(url);
-  } catch (error: any) {
-    console.error(
-      "Download failed:",
-      error
-    );
-
-    if (
-      error.response?.data instanceof Blob
-    ) {
-      const text =
-        await error.response.data.text();
-
-      try {
-        const data =
-          JSON.parse(text);
-
-        alert(
-          data.message ||
-            "Download failed"
-        );
-      } catch {
-        alert("Download failed");
-      }
-    } else {
-      alert(
-        error.response?.data?.message ||
-          "Download failed"
-      );
+  const handleDownload = async () => {
+    if (!user) {
+      alert("Please login to download videos.");
+      return;
     }
-  }
-};
+
+    try {
+      const deviceId = getDeviceId();
+      const idempotencyKey = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function' 
+        ? crypto.randomUUID() 
+        : Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+        
+      let token = "";
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken();
+      }
+
+      // Check eligibility first to gracefully handle quota errors
+      try {
+        await axiosInstance.get(`/download/check/${video._id}?deviceId=${deviceId}`);
+      } catch (checkError: any) {
+        console.error("Eligibility check failed:", checkError);
+        alert(checkError.response?.data?.message || "You are not eligible to download this video.");
+        return;
+      }
+
+      const backendUrl = process.env.NEXT_PUBLIC_SERVER_URL || "http://localhost:5000";
+      const downloadUrl = `${backendUrl}/download/${video._id}?token=${token}&deviceId=${deviceId}&idempotencyKey=${idempotencyKey}`;
+
+      // Use fetch to download the video without navigating away from the page
+      alert("Download started... please wait while it processes.");
+      
+      const response = await fetch(downloadUrl);
+      
+      if (!response.ok) {
+        // If the backend returned an error (e.g. 500), read the error message and alert it
+        const errorText = await response.text();
+        alert(errorText || "Download failed due to a server error.");
+        return;
+      }
+      
+      // If successful, create a local blob and trigger the browser download
+      const blob = await response.blob();
+      const localUrl = window.URL.createObjectURL(blob);
+      
+      const link = document.createElement("a");
+      link.href = localUrl;
+      link.download = video.filename || "video.mp4";
+      document.body.appendChild(link);
+      link.click();
+      
+      // Cleanup
+      link.remove();
+      window.URL.revokeObjectURL(localUrl);
+      
+    } catch (error: any) {
+      console.error("Download failed:", error);
+      alert(`Download failed: ${error.message || "Unknown error"}`);
+    }
+  };
+
+  const handleSubscribe = async () => {
+    if (!user) {
+      alert("Please login to subscribe.");
+      return;
+    }
+    try {
+      const res = await axiosInstance.post(`/subscriber/toggle/${video.videochanel}`, {
+        userId: user._id,
+      });
+      setIsSubscribed(res.data.subscribed);
+    } catch (error) {
+      console.error("Error toggling subscription:", error);
+    }
+  };
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">{video.videotitle}</h1>
@@ -201,7 +209,13 @@ const VideoInfo = ({ video }: any) => {
             <h3 className="font-medium">{video.videochanel}</h3>
             <p className="text-sm text-muted-foreground">1.2M subscribers</p>
           </div>
-          <Button className="ml-4">Subscribe</Button>
+          <Button 
+            className="ml-4" 
+            variant={isSubscribed ? "secondary" : "default"}
+            onClick={handleSubscribe}
+          >
+            {isSubscribed ? "Subscribed" : "Subscribe"}
+          </Button>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center bg-secondary text-secondary-foreground rounded-full">
